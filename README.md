@@ -1,28 +1,29 @@
 # Automatic Btrfs Snapshots with systemd
 
-This how-to describes how to set up automatic daily Btrfs snapshots for `/` and `/home` on Fedora. Snapshots are managed in a rotating fashion, keeping only the last 10. If you start your system multiple times a day, only one snapshot per day will be created.
+    Status: 🚧 Work In Progress
+
+This guide sets up automatic daily Btrfs snapshots for systemd-homed using the Btrfs backend. Snapshots are rotated to keep only the most recent 10. If the system starts multiple times in one day, only one snapshot will be created for that day.
 
 ## Prerequisites
 
-- Fedora 41 or newer
-- Btrfs as the filesystem for `/` and `/home`
-- System using `systemd`
+- `systemd-homed` with a Btrfs-backed home directory.
+- The `user_subvol_rm_allowed` mount option must be set.
 
 ## 1. Create the Script
 
-Save the following script as `/usr/local/bin/btrfs_snapshot.sh`:
+Save the following script as `${HOME}/scripts/btrfs_snapshot.sh`:
 
 ```bash
 #!/bin/bash
 
-# Directories for storing snapshots
-ROOT_SNAPSHOT_DIR="/.snapshots"
-HOME_SNAPSHOT_DIR="/home/.snapshots"
-MAX_SNAPSHOTS=10
+set -euo pipefail
 
-# File to track the last snapshot date
-TIMESTAMP_FILE="/var/lib/btrfs_snapshot_last_run"
+# Configuration
+HOME_SNAPSHOT_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/btrfs-snapshots"
+MAX_SNAPSHOTS=10
+TIMESTAMP_FILE="${HOME_SNAPSHOT_DIR}/btrfs_snapshot_last_run"
 DATE=$(date +"%Y-%m-%d")
+
 
 # Function to create and rotate snapshots
 create_and_rotate_snapshots() {
@@ -32,20 +33,20 @@ create_and_rotate_snapshots() {
     # Create the snapshot
     snapshot_path="${target_dir}/${DATE}"
     echo "Creating snapshot for ${source} at ${snapshot_path}"
-    sudo btrfs subvolume snapshot -r "${source}" "${snapshot_path}"
+    btrfs subvolume snapshot -r "$source" "$snapshot_path"
     
     # Rotate old snapshots
-    snapshots=($(sudo ls -1 "${target_dir}" | sort -r))
+    snapshots=($(ls -1 "${target_dir}" | sort -r))
     if [ ${#snapshots[@]} -gt $MAX_SNAPSHOTS ]; then
         for snapshot in "${snapshots[@]:$MAX_SNAPSHOTS}"; do
             echo "Deleting old snapshot: ${target_dir}/${snapshot}"
-            sudo btrfs subvolume delete "${target_dir}/${snapshot}"
+            btrfs subvolume delete "${target_dir}/${snapshot}"
         done
     fi
 }
 
-# Ensure the snapshot directories exist
-sudo mkdir -p "${ROOT_SNAPSHOT_DIR}" "${HOME_SNAPSHOT_DIR}"
+# Ensure the snapshot directory exist
+mkdir -p "$HOME_SNAPSHOT_DIR"
 
 # Check the last execution date
 if [ -f "${TIMESTAMP_FILE}" ]; then
@@ -56,8 +57,7 @@ fi
 
 # Create only one snapshot per day
 if [ "${LAST_RUN_DATE}" != "${DATE}" ]; then
-    create_and_rotate_snapshots "/" "${ROOT_SNAPSHOT_DIR}"
-    create_and_rotate_snapshots "/home" "${HOME_SNAPSHOT_DIR}"
+    create_and_rotate_snapshots "$HOME" "$HOME_SNAPSHOT_DIR"
     echo "${DATE}" | sudo tee "${TIMESTAMP_FILE}" > /dev/null
     echo "Snapshots completed successfully."
 else
@@ -65,67 +65,66 @@ else
 fi
 ```
 
-### **Set Permissions**
+### **Set Script Permissions**
 
 Run:
 ```bash
-sudo chmod +x /usr/local/bin/btrfs_snapshot.sh
+chmod +x "${HOME}/scripts/btrfs_snapshot.sh"
 ```
 
-## 2. Create the Systemd Service
+## 2. Create the systemd service
 
-Create the file `/etc/systemd/system/btrfs-snapshot.service` with the following content:
+Create the file `.config/systemd/user/btrfs-snapshot.service` with the following content:
 
 ```ini
 [Unit]
-Description=Btrfs Snapshot Service
+Description=Create a daily Btrfs snapshot of the home directory
 
 [Service]
-ExecStart=/usr/local/bin/btrfs_snapshot.sh
 Type=oneshot
+ExecStart=%h/scripts/btrfs_snapshot.sh
 ```
 
-## 3. Create the Systemd Timer
+## 3. Create the systemd Timer
 
-Create the file `/etc/systemd/system/btrfs-snapshot.timer` with the following content:
+Create the file `.config/systemd/user/btrfs-snapshot.timer` with the following content:
 
 ```ini
 [Unit]
-Description=Run Btrfs Snapshot Service on Boot
+Description=Daily Btrfs snapshot timer
 
 [Timer]
-OnBootSec=2min
+OnActiveSec=2min
 Persistent=true
 
 [Install]
-WantedBy=timers.target
+WantedBy=default.target
 ```
 
-## 4. Enable the Service and Timer
+## 4. Enable and Start the Timer
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now btrfs-snapshot.timer
+systemctl --user daemon-reexec
+systemctl --user enable --now btrfs-snapshot.timer
 ```
 
 ## 5. Verification
 
-Check the status of the timer:
+Check if the timer is active:
 ```bash
-systemctl list-timers --all | grep btrfs-snapshot
+systemctl --user list-timers --all | grep btrfs-snapshot
 ```
 
 If necessary, you can manually start the service:
 ```bash
-sudo systemctl start btrfs-snapshot.service
+systemctl --user start btrfs-snapshot.service
 ```
 
 View logs:
 ```bash
-journalctl -u btrfs-snapshot.service --no-pager
+journalctl --user -u btrfs-snapshot.service --no-pager
 ```
 
 ---
 
-Now, automatic daily snapshots are created and managed. 🎉
-
+✅ Now your system will automatically create and rotate daily Btrfs snapshots of your home directory!
