@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Configuration
+HOME_SNAPSHOT_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/btrfs-snapshots"
+MAX_SNAPSHOTS=10
+TIMESTAMP_FILE="${HOME_SNAPSHOT_DIR}/btrfs_snapshot_last_run"
+DATE=$(date +"%Y-%m-%d")
+
+# Ensure snapshot directory exists
+mkdir -p "$HOME_SNAPSHOT_DIR"
+
+# Create and rotate snapshots
+create_and_rotate_snapshots() {
+    local source="$1"
+    local target_dir="$2"
+    local snapshot_path="${target_dir}/${DATE}"
+
+    if [ -e "$snapshot_path" ]; then
+        echo "Snapshot for today already exists at ${snapshot_path}."
+        return
+    fi
+
+    echo "Creating snapshot for ${source} at ${snapshot_path}"
+    btrfs subvolume snapshot -r "$source" "$snapshot_path"
+
+    # Rotate old snapshots
+    mapfile -t snapshots < <(ls -1 "${target_dir}" | sort -r)
+    if (( ${#snapshots[@]} > MAX_SNAPSHOTS )); then
+        for snapshot in "${snapshots[@]:$MAX_SNAPSHOTS}"; do
+            echo "Deleting old snapshot: ${target_dir}/${snapshot}"
+            btrfs subvolume delete "${target_dir}/${snapshot}"
+        done
+    fi
+}
+
+# Check if snapshot already taken today
+if [ -f "$TIMESTAMP_FILE" ]; then
+    LAST_RUN_DATE=$(<"$TIMESTAMP_FILE")
+else
+    LAST_RUN_DATE=""
+fi
+
+if [ "$LAST_RUN_DATE" != "$DATE" ]; then
+    create_and_rotate_snapshots "$HOME" "$HOME_SNAPSHOT_DIR"
+    echo "$DATE" > "$TIMESTAMP_FILE"
+    echo "Snapshot completed successfully."
+else
+    echo "Snapshot already taken today ($DATE). Skipping."
+fi
+
